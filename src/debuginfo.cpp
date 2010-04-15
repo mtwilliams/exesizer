@@ -7,9 +7,13 @@
 #include <stdarg.h>
 #include <algorithm>
 #include <map>
+
+#include <windows.h>
+#include <DbgHelp.h>
+
 #include "sutil.h"
 
-
+#pragma comment(lib,"DbgHelp.lib")
 
 /****************************************************************************/
 
@@ -179,15 +183,6 @@ sInt DebugInfo::GetFile( sInt fileName )
 
 sInt DebugInfo::GetFileByName( sChar *objName )
 {
-	sChar *p;
-
-	// skip path seperators
-	while((p = (sChar *) sFindString(objName,"\\")))
-		objName = p + 1;
-
-	while((p = (sChar *) sFindString(objName,"/")))
-		objName = p + 1;
-
 	return GetFile( MakeString(objName) );
 }
 
@@ -326,8 +321,40 @@ static void sAppendPrintF(std::string &str,const char *format,...)
 	str += buffer;
 }
 
+const char * GetUndecorate(const char *str)
+{
+	static std::string temp;
+	temp = str;
+	if ( *str == '?' )
+	{
+		char scratch[1024];
+		UnDecorateSymbolName( str, scratch, 1024, 0);
+		temp = scratch;
+	}
+	return temp.c_str();
+}
+
 std::string DebugInfo::WriteReport()
 {
+
+	NVSHARE::HtmlTableInterface *iface = NVSHARE::getHtmlTableInterface();
+	mDocument = iface->createHtmlDocument("Executable Size Report");
+
+	NVSHARE::HtmlTable *groupTable = mDocument->createHtmlTable("Code Size By Group");
+	groupTable->addHeader("Group/Name,Function/Count,Code/Size");
+	groupTable->computeTotals();
+	groupTable->addSort("Sorted by code size",3,false,2,false);
+
+	NVSHARE::HtmlTable *objectTable = mDocument->createHtmlTable("Code Size By Object File");
+	objectTable->addHeader("Object/Name,Function/Count,Code/Size");
+	objectTable->computeTotals();
+	objectTable->addSort("Sorted by code size",3,false,2,false);
+
+	NVSHARE::HtmlTable *dataTable = mDocument->createHtmlTable("Data Size");
+	dataTable->addHeader("Data/Name,Data/Size,Object/File");
+	dataTable->computeTotals();
+	dataTable->addSort("Sorted by data size",2,false,1,true);
+
   const int kMinSymbolSize = 512;
   const int kMinTemplateSize = 512;
   const int kMinDataSize = 1024;
@@ -349,9 +376,12 @@ std::string DebugInfo::WriteReport()
 	if( Symbols[i].Size < kMinSymbolSize )
 		break;
     if(Symbols[i].Class == DIC_CODE)
+    {
+    	addFunctionReport(GetUndecorate(GetStringPrep(Symbols[i].name)), GetStringPrep(m_Files[Symbols[i].objFileNum].fileName),Symbols[i].Size );
       sAppendPrintF(Report,"%15s: %-50s %s\n",
 	  NVSHARE::formatNumber(Symbols[i].Size),
-        GetStringPrep(Symbols[i].name), GetStringPrep(m_Files[Symbols[i].objFileNum].fileName));
+        GetUndecorate(GetStringPrep(Symbols[i].name)), GetStringPrep(m_Files[Symbols[i].objFileNum].fileName));
+    }
   }
 
   // templates
@@ -376,11 +406,18 @@ std::string DebugInfo::WriteReport()
       break;
     if(Symbols[i].Class == DIC_DATA)
     {
+
+		dataTable->addColumn(GetUndecorate(GetStringPrep(Symbols[i].name)));
+		dataTable->addColumn(Symbols[i].Size);
+		dataTable->addColumn(GetStringPrep(m_Files[Symbols[i].objFileNum].fileName));
+		dataTable->nextRow();
       sAppendPrintF(Report,"%15s: %-50s %s\n",
 		  NVSHARE::formatNumber(Symbols[i].Size),
         GetStringPrep(Symbols[i].name), GetStringPrep(m_Files[Symbols[i].objFileNum].fileName));
     }
   }
+
+
 
 	sAppendPrintF(Report,"\nBSS by size bytes:\n");
   for(i=0;i<Symbols.size();i++)
@@ -453,5 +490,109 @@ std::string DebugInfo::WriteReport()
 	size = CountSizeInClass(DIC_BSS);
 	sAppendPrintF(Report,"Overall BSS:  %15s\n",NVSHARE::formatNumber(size));
 
+	for (FunctionReportMap::iterator i=mFunctions.begin(); i!=mFunctions.end(); ++i)
+	{
+		FunctionReport *fr = (*i).second;
+		const char *typeName = (*i).first.c_str();
+		groupTable->addColumn(typeName);
+		groupTable->addColumn(fr->mTotalFunctionCount);
+		groupTable->addColumn(fr->mTotalFunctionSize);
+		groupTable->nextRow();
+	}
+
+	for (ObjectReportMap::iterator i=mObjects.begin(); i!=mObjects.end(); ++i)
+	{
+		(*i).second->finalReport(objectTable);
+	}
+
+	size_t len = 0;
+	const char *doc = mDocument->saveDocument(len,NVSHARE::HST_SIMPLE_HTML);
+	printf("Saving 'exesizer.html'\r\n");
+	FILE *fph = fopen("exesizer.html", "wb");
+	if ( fph )
+	{
+		fwrite(doc, len, 1, fph);
+		fclose(fph);
+	}
+
+	mDocument->releaseDocumentMemory(doc);
+	iface->releaseHtmlDocument(mDocument);
+
+
   return Report;
+}
+
+
+void DebugInfo::addFunctionReport(const char *function,const char *objectFile,size_t functionSize)
+{
+
+	char scratch[512];
+	strcpy(scratch,objectFile);
+
+	const char *lastSlash = NULL;
+	const char *scan = objectFile;
+	while ( *scan )
+	{
+		if ( *scan == '\\' )
+			lastSlash = scan;
+		scan++;
+	}
+
+	if ( lastSlash )
+		objectFile = lastSlash+1;
+
+	const char *prefix = scratch;
+
+    //                    01 234567 890123456
+	if ( strncmp(scratch,".\\build\\Xbox 360\\",17) == 0 )
+	{
+		prefix+=17;
+	}
+	char *sc = strstr(scratch,"\\release");
+	if ( sc )
+	{
+		*sc = 0;
+	}
+
+
+	char temp[512];
+	strcpy(temp,prefix);
+	strlwr(temp);
+	const char *isApex = strstr(temp,"apex");
+	if ( isApex == NULL ) return;
+	if ( temp[0] == 'c' && temp[1] == ':' ) return;
+
+	std::string byType = prefix;
+
+	FunctionReportMap::iterator found = mFunctions.find( byType );
+	FunctionReport *fr;
+
+	if ( found == mFunctions.end() )
+	{
+		fr = new FunctionReport(byType,mDocument);
+		mFunctions[byType] = fr;
+	}
+	else
+	{
+		fr = (*found).second;
+	}
+	fr->addFunction(function,objectFile,functionSize);
+
+
+
+	{
+		ObjectReportMap::iterator found = mObjects.find(byType);
+		ObjectReport *or;
+		if ( found == mObjects.end() )
+		{
+			or = new ObjectReport(byType,mDocument);
+			mObjects[byType] = or;
+		}
+		else
+		{
+			or = (*found).second;
+		}
+		or->addFunction(function,objectFile,functionSize);
+	}
+
 }

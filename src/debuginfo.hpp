@@ -7,6 +7,7 @@
 
 #include "types.hpp"
 #include <map>
+#include "HtmlTable.h"
 
 using std::string;
 
@@ -50,6 +51,134 @@ struct TemplateSymbol
 	sU32	count;
 };
 
+
+class FunctionReport
+{
+public:
+	FunctionReport(const std::string &type,NVSHARE::HtmlDocument *document)
+	{
+		char scratch[1024];
+		sprintf(scratch,"Functions by size for code region '%s'", type.c_str() );
+		mTable = document->createHtmlTable(scratch);
+		mTable->addHeader("Function/Name,Function/Size,Object/File");
+		mTable->addSort(scratch,2,false,1,true);
+		mTable->computeTotals();
+		mTotalFunctionSize = 0;
+		mTotalFunctionCount = 0;
+	}
+
+	~FunctionReport(void)
+	{
+	}
+
+	void addFunction(const char *function,const char *objectFile,size_t functionSize)
+	{
+		mTable->addColumn(function);
+		mTable->addColumn(functionSize);
+		mTable->addColumn(objectFile);
+		mTable->nextRow();
+		mTotalFunctionSize+=functionSize;
+		mTotalFunctionCount++;
+	}
+
+
+	NVSHARE::HtmlTable	*mTable;
+	size_t mTotalFunctionSize;
+	size_t mTotalFunctionCount;
+};
+
+typedef std::map< std::string, FunctionReport * > FunctionReportMap;
+
+class ByObject
+{
+public:
+	ByObject(const std::string &oname,NVSHARE::HtmlDocument *document)
+	{
+		char scratch[1024];
+		sprintf(scratch,"Functions by size for object file '%s'", oname.c_str() );
+		mTable = document->createHtmlTable(scratch);
+		mTable->addHeader("Function/Name,Code/Size");
+		mTable->addSort(scratch,2,false,1,true);
+		mTable->computeTotals();
+		mFunctionCount = 0;
+		mCodeSize = 0;
+	}
+
+	void addFunction(const char *function,size_t codeSize)
+	{
+		mTable->addColumn(function);
+		mTable->addColumn(codeSize);
+		mTable->nextRow();
+		mFunctionCount++;
+		mCodeSize+=codeSize;
+	}
+
+	size_t				mFunctionCount;
+	size_t				mCodeSize;
+	NVSHARE::HtmlTable	*mTable;
+};
+
+typedef std::map< std::string, ByObject * > ByObjectMap;
+
+class ObjectReport
+{
+public:
+	ObjectReport(const std::string &type,NVSHARE::HtmlDocument *document)
+	{
+		char scratch[1024];
+		sprintf(scratch,"Object files by size for code region '%s'", type.c_str() );
+		mTable = document->createHtmlTable(scratch);
+		mTable->addHeader("Object/File,Function/Count,Code/Size");
+		mTable->addSort(scratch,3,false,2,false);
+		mTable->computeTotals();
+	}
+
+	~ObjectReport(void)
+	{
+	}
+
+	void addFunction(const char *function,const char *objectFile,size_t functionSize)
+	{
+		std::string oname = objectFile;
+		ByObject *bo;
+		ByObjectMap::iterator found = mObjects.find(oname);
+		if ( found == mObjects.end() )
+		{
+			bo = new ByObject(oname,mTable->getDocument());
+			mObjects[oname] = bo;
+		}
+		else
+		{
+			bo = (*found).second;
+		}
+		bo->addFunction(function,functionSize);
+	}
+
+	void finalReport(NVSHARE::HtmlTable *table)
+	{
+		for (ByObjectMap::iterator i=mObjects.begin(); i!=mObjects.end(); i++)
+		{
+			const char *oname = (*i).first.c_str();
+			ByObject &bo = *(*i).second;
+			mTable->addColumn(oname);
+			mTable->addColumn(bo.mFunctionCount);
+			mTable->addColumn(bo.mCodeSize);
+			mTable->nextRow();
+
+			table->addColumn(oname);
+			table->addColumn(bo.mFunctionCount);
+			table->addColumn(bo.mCodeSize);
+			table->nextRow();
+		}
+	}
+
+	ByObjectMap			mObjects;
+	NVSHARE::HtmlTable	*mTable;
+
+};
+
+typedef std::map< std::string, ObjectReport * > ObjectReportMap;
+
 class DebugInfo
 {
 	typedef std::vector<string>		StringByIndexVector;
@@ -62,10 +191,10 @@ class DebugInfo
 	sU32 CountSizeInClass(sInt type) const;
 
 public:
-  sArray<DISymbol>	Symbols;
+  sArray<DISymbol>			Symbols;
   sArray<TemplateSymbol>	Templates;
-  sArray<DISymFile>	m_Files;
-  sArray<DISymNameSp>	NameSps;
+  sArray<DISymFile>			m_Files;
+  sArray<DISymNameSp>		NameSps;
 
   void Init();
   void Exit();
@@ -82,12 +211,20 @@ public:
 
   sInt GetNameSpace(sInt name);
   sInt GetNameSpaceByName(sChar *name);
-  
+
   void StartAnalyze();
   void FinishAnalyze();
   sBool FindSymbol(sU32 VA,DISymbol **sym);
 
   std::string WriteReport();
+
+	void addFunctionReport(const char *function,const char *objectFile,size_t functionSize);
+
+	FunctionReportMap	mFunctions;
+	ObjectReportMap		mObjects;
+
+	NVSHARE::HtmlDocument *mDocument;
+
 };
 
 class DebugInfoReader
