@@ -184,6 +184,14 @@
 				>
 			</File>
 			<File
+				RelativePath=".\src\htmltable.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\src\htmltable.h"
+				>
+			</File>
+			<File
 				RelativePath=".\src\inparser.cpp"
 				>
 			</File>
