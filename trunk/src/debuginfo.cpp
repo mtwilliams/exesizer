@@ -13,6 +13,8 @@
 
 #include "sutil.h"
 
+#define ONLY_APEX 1
+
 #pragma comment(lib,"DbgHelp.lib")
 
 /****************************************************************************/
@@ -554,13 +556,14 @@ void DebugInfo::addFunctionReport(const char *function,const char *objectFile,si
 		*sc = 0;
 	}
 
-
+#if ONLY_APEX
 	char temp[512];
 	strcpy(temp,prefix);
 	strlwr(temp);
 	const char *isApex = strstr(temp,"apex");
 	if ( isApex == NULL ) return;
 	if ( temp[0] == 'c' && temp[1] == ':' ) return;
+#endif
 
 	std::string byType = prefix;
 
