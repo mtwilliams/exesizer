@@ -1,0 +1,1 @@
+This project reads PDB files produced by visual studio and ouputs a nicely formated report
